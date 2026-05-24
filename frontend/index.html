@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedMamba-Guard - 医学影像可信推理</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0f0f1a;
+            --bg-secondary: #1a1a2e;
+            --bg-card: #16213e;
+            --accent-cyan: #00d4ff;
+            --accent-purple: #7b2cbf;
+            --accent-green: #00ff88;
+            --accent-yellow: #ffd60a;
+            --accent-orange: #ff9500;
+            --accent-red: #ff4757;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0a0;
+            --border-radius: 12px;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* 头部 */
+        .header {
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-card) 100%);
+            padding: 20px 40px;
+            border-bottom: 1px solid rgba(0, 212, 255, 0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 1.8rem;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header .badge {
+            background: var(--accent-cyan);
+            color: var(--bg-primary);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        /* 警告横幅 */
+        .warning-banner {
+            background: linear-gradient(90deg, var(--accent-red), var(--accent-orange));
+            color: white;
+            padding: 12px 40px;
+            text-align: center;
+            font-weight: 600;
+            display: none;
+        }
+
+        .warning-banner.show {
+            display: block;
+        }
+
+        /* 容器 */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        /* 标签页 */
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: var(--bg-card);
+            border: none;
+            border-radius: var(--border-radius);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        .tab:hover {
+            background: rgba(0, 212, 255, 0.1);
+            color: var(--accent-cyan);
+        }
+
+        .tab.active {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            color: var(--bg-primary);
+            font-weight: 600;
+        }
+
+        /* 上传区域 */
+        .upload-zone {
+            border: 2px dashed rgba(0, 212, 255, 0.4);
+            border-radius: var(--border-radius);
+            padding: 60px;
+            text-align: center;
+            background: var(--bg-secondary);
+            transition: all 0.3s;
+            cursor: pointer;
+            margin-bottom: 30px;
+        }
+
+        .upload-zone:hover, .upload-zone.dragover {
+            border-color: var(--accent-cyan);
+            background: rgba(0, 212, 255, 0.05);
+        }
+
+        .upload-zone .icon {
+            font-size: 4rem;
+            margin-bottom: 20px;
+        }
+
+        .upload-zone h3 {
+            font-size: 1.4rem;
+            margin-bottom: 10px;
+        }
+
+        .upload-zone p {
+            color: var(--text-secondary);
+        }
+
+        .upload-zone input {
+            display: none;
+        }
+
+        /* 主布局 */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+
+        @media (max-width: 900px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 卡片 */
+        .card {
+            background: var(--bg-card);
+            border-radius: var(--border-radius);
+            padding: 25px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: var(--accent-cyan);
+        }
+
+        /* 图片预览 */
+        .image-preview {
+            width: 100%;
+            aspect-ratio: 1;
+            background: var(--bg-secondary);
+            border-radius: var(--border-radius);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .image-preview img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        .image-preview .placeholder {
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        /* 结果面板 */
+        .result-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 15px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .result-item:last-child {
+            border-bottom: none;
+        }
+
+        .result-label {
+            color: var(--text-secondary);
+        }
+
+        .result-value {
+            font-weight: 600;
+        }
+
+        .result-value.prediction {
+            color: var(--accent-green);
+        }
+
+        /* 仪表盘 */
+        .gauge-container {
+            display: flex;
+            justify-content: center;
+            margin: 20px 0;
+        }
+
+        .gauge {
+            position: relative;
+            width: 200px;
+            height: 200px;
+        }
+
+        .gauge-bg {
+            fill: none;
+            stroke: var(--bg-secondary);
+            stroke-width: 20;
+        }
+
+        .gauge-fill {
+            fill: none;
+            stroke-width: 20;
+            stroke-linecap: round;
+            transform: rotate(-90deg);
+            transform-origin: center;
+            transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
+        }
+
+        .gauge-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        .gauge-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+
+        .gauge-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .risk-low { stroke: var(--accent-green); }
+        .risk-medium { stroke: var(--accent-yellow); }
+        .risk-high { stroke: var(--accent-orange); }
+        .risk-critical { stroke: var(--accent-red); }
+
+        /* 置信度条 */
+        .confidence-bar {
+            height: 8px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-green));
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+
+        /* 风险成分条形图 */
+        .risk-components {
+            margin-top: 20px;
+        }
+
+        .risk-component-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .risk-component-label {
+            width: 80px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .risk-component-bar {
+            flex: 1;
+            height: 12px;
+            background: var(--bg-secondary);
+            border-radius: 6px;
+            overflow: hidden;
+            margin: 0 10px;
+        }
+
+        .risk-component-fill {
+            height: 100%;
+            border-radius: 6px;
+            transition: width 0.5s ease;
+        }
+
+        .risk-component-value {
+            width: 40px;
+            font-size: 0.85rem;
+            text-align: right;
+        }
+
+        /* 复核区域列表 */
+        .review-regions {
+            margin-top: 20px;
+        }
+
+        .review-region-item {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            border-left: 3px solid var(--accent-red);
+        }
+
+        .review-region-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .review-region-type {
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .review-region-level {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .level-high { background: rgba(255, 71, 87, 0.2); color: var(--accent-red); }
+        .level-medium { background: rgba(255, 214, 10, 0.2); color: var(--accent-yellow); }
+        .level-low { background: rgba(0, 255, 136, 0.2); color: var(--accent-green); }
+
+        .review-region-reason {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .review-region-bbox {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 5px;
+            font-family: monospace;
+        }
+
+        /* 风险热力图叠加 */
+        .heatmap-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.5;
+            pointer-events: none;
+            display: none;
+        }
+
+        .heatmap-overlay.show {
+            display: block;
+        }
+
+        /* 批次测试 */
+        .batch-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .batch-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 12px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .batch-item img {
+            width: 60px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 8px;
+        }
+
+        .batch-item-info {
+            flex: 1;
+        }
+
+        .batch-item-name {
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .batch-item-result {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .batch-item-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .status-low { background: rgba(0, 255, 136, 0.2); color: var(--accent-green); }
+        .status-medium { background: rgba(255, 214, 10, 0.2); color: var(--accent-yellow); }
+        .status-high { background: rgba(255, 149, 0, 0.2); color: var(--accent-orange); }
+        .status-critical { background: rgba(255, 71, 87, 0.2); color: var(--accent-red); }
+
+        /* 统计面板 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            padding: 20px;
+            border-radius: var(--border-radius);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-cyan);
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 5px;
+        }
+
+        /* 按钮 */
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            color: var(--bg-primary);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0, 212, 255, 0.3);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .header {
+                padding: 15px 20px;
+            }
+            .container {
+                padding: 15px;
+            }
+            .upload-zone {
+                padding: 30px;
+            }
+        }
+
+        /* 加载动画 */
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid var(--bg-secondary);
+            border-top-color: var(--accent-cyan);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* 隐藏 */
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <!-- 头部 -->
+    <header class="header">
+        <h1>MedMamba-Guard 可信推理</h1>
+        <span class="badge">SSM + CTM + Cross-Scan</span>
+    </header>
+
+    <!-- 警告横幅 -->
+    <div class="warning-banner" id="warning-banner">
+        ⚠️ 高风险预测已触发医生复核机制
+    </div>
+
+    <div class="container">
+        <!-- 标签页 -->
+        <div class="tabs">
+            <button class="tab active" data-tab="single">单图预测</button>
+            <button class="tab" data-tab="batch">批量测试</button>
+        </div>
+
+        <!-- 单图预测 -->
+        <div id="single-tab" class="tab-content">
+            <!-- 上传区 -->
+            <div class="upload-zone" id="upload-zone">
+                <div class="icon">🩻</div>
+                <h3>拖拽医学影像到此处</h3>
+                <p>支持 JPG, PNG, DICOM 格式</p>
+                <p style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                    或点击选择文件
+                </p>
+                <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.dcm,.dicom">
+            </div>
+
+            <!-- 结果 -->
+            <div class="main-grid">
+                <!-- 图片预览 -->
+                <div class="card">
+                    <h3 class="card-title">📷 影像预览</h3>
+                    <div class="image-preview" id="image-preview">
+                        <div class="placeholder">
+                            <p style="font-size: 3rem;">🖼️</p>
+                            <p>上传图片查看预览</p>
+                        </div>
+                        <!-- 风险热力图叠加层 -->
+                        <canvas class="heatmap-overlay" id="heatmap-canvas"></canvas>
+                    </div>
+                </div>
+
+                <!-- 预测结果 -->
+                <div class="card">
+                    <h3 class="card-title">📊 分析结果</h3>
+                    
+                    <div id="result-empty" style="text-align: center; padding: 40px; color: var(--text-secondary);">
+                        <p>暂无预测结果</p>
+                    </div>
+
+                    <div id="result-content" class="hidden">
+                        <!-- 预测类别 -->
+                        <div class="result-item">
+                            <span class="result-label">预测类别</span>
+                            <span class="result-value prediction" id="result-class">-</span>
+                        </div>
+
+                        <!-- 置信度 -->
+                        <div class="result-item">
+                            <span class="result-label">置信度</span>
+                            <span class="result-value" id="result-confidence">-</span>
+                        </div>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" id="confidence-bar" style="width: 0%"></div>
+                        </div>
+
+                        <!-- 加载中 -->
+                        <div class="loading" id="loading">
+                            <div class="spinner"></div>
+                            <p>分析中...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 风险仪表盘 -->
+            <div class="card" style="margin-top: 30px;">
+                <h3 class="card-title">🎭 MedMamba-Guard 风险评估</h3>
+                <div class="gauge-container">
+                    <div class="gauge">
+                        <svg viewBox="0 0 200 200">
+                            <circle class="gauge-bg" cx="100" cy="100" r="80"/>
+                            <circle class="gauge-fill risk-low" id="gauge-fill" cx="100" cy="100" r="80"
+                                stroke-dasharray="502.65" stroke-dashoffset="502.65"/>
+                        </svg>
+                        <div class="gauge-center">
+                            <div class="gauge-value" id="gauge-value">0.00</div>
+                            <div class="gauge-label">R_total</div>
+                        </div>
+                    </div>
+                </div>
+                <div style="text-align: center; margin-top: 10px;">
+                    <span class="status-low" id="risk-badge">LOW</span>
+                </div>
+
+                <!-- 风险成分条形图 -->
+                <div class="risk-components">
+                    <h4 style="font-size: 0.95rem; margin-bottom: 15px; color: var(--text-secondary);">风险成分分解</h4>
+                    
+                    <div class="risk-component-item">
+                        <span class="risk-component-label">R_state</span>
+                        <div class="risk-component-bar">
+                            <div class="risk-component-fill" id="bar-r-state" style="width: 0%; background: var(--accent-cyan);"></div>
+                        </div>
+                        <span class="risk-component-value" id="val-r-state">0.00</span>
+                    </div>
+
+                    <div class="risk-component-item">
+                        <span class="risk-component-label">R_scan</span>
+                        <div class="risk-component-bar">
+                            <div class="risk-component-fill" id="bar-r-scan" style="width: 0%; background: var(--accent-purple);"></div>
+                        </div>
+                        <span class="risk-component-value" id="val-r-scan">0.00</span>
+                    </div>
+
+                    <div class="risk-component-item">
+                        <span class="risk-component-label">R_task</span>
+                        <div class="risk-component-bar">
+                            <div class="risk-component-fill" id="bar-r-task" style="width: 0%; background: var(--accent-orange);"></div>
+                        </div>
+                        <span class="risk-component-value" id="val-r-task">0.00</span>
+                    </div>
+
+                    <div class="risk-component-item">
+                        <span class="risk-component-label">R_entropy</span>
+                        <div class="risk-component-bar">
+                            <div class="risk-component-fill" id="bar-r-entropy" style="width: 0%; background: var(--accent-red);"></div>
+                        </div>
+                        <span class="risk-component-value" id="val-r-entropy">0.00</span>
+                    </div>
+                </div>
+
+                <!-- 复核区域列表 -->
+                <div class="review-regions" id="review-regions">
+                    <h4 style="font-size: 0.95rem; margin-bottom: 15px; color: var(--text-secondary);">🔍 高风险区域 (需医生复核)</h4>
+                    <div id="review-regions-list">
+                        <p style="color: var(--text-secondary); font-size: 0.9rem;">无高风险区域</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 批量测试 -->
+        <div id="batch-tab" class="tab-content hidden">
+            <!-- 上传区 -->
+            <div class="upload-zone" id="batch-upload-zone">
+                <div class="icon">📁</div>
+                <h3>批量上传医学影像</h3>
+                <p>支持多文件选择，JPG, PNG, DICOM 格式</p>
+                <input type="file" id="batch-file-input" accept=".jpg,.jpeg,.png,.dcm,.dicom" multiple>
+            </div>
+
+            <!-- 统计面板 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-total">0</div>
+                    <div class="stat-label">总图片数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-processed">0</div>
+                    <div class="stat-label">已分析</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-avg-risk">-</div>
+                    <div class="stat-label">平均风险</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-critical-count">0</div>
+                    <div class="stat-label">高危数量</div>
+                </div>
+            </div>
+
+            <!-- 批次列表 -->
+            <div class="card">
+                <h3 class="card-title">📋 分析详情</h3>
+                <div class="batch-list" id="batch-list">
+                    <div style="text-align: center; padding: 40px; color: var(--text-secondary);">
+                        <p>上传图片开始批量分析</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 配置
+        const API_BASE = 'http://localhost:8866';
+
+        // DOM元素
+        const tabs = document.querySelectorAll('.tab');
+        const tabContents = document.querySelectorAll('.tab-content');
+        const uploadZone = document.getElementById('upload-zone');
+        const fileInput = document.getElementById('file-input');
+        const batchUploadZone = document.getElementById('batch-upload-zone');
+        const batchFileInput = document.getElementById('batch-file-input');
+        const warningBanner = document.getElementById('warning-banner');
+
+        // 标签页切换
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                const tabId = tab.dataset.tab;
+                tabContents.forEach(tc => {
+                    tc.classList.toggle('hidden', tc.id !== `${tabId}-tab`);
+                });
+            });
+        });
+
+        // 上传区拖拽
+        function setupDragDrop(zone, input, isBatch = false) {
+            zone.addEventListener('dragover', e => {
+                e.preventDefault();
+                zone.classList.add('dragover');
+            });
+            zone.addEventListener('dragleave', () => {
+                zone.classList.remove('dragover');
+            });
+            zone.addEventListener('drop', e => {
+                e.preventDefault();
+                zone.classList.remove('dragover');
+                const files = Array.from(e.dataTransfer.files);
+                if (files.length > 0) {
+                    handleFiles(files, isBatch);
+                }
+            });
+            zone.addEventListener('click', () => input.click());
+            input.addEventListener('change', e => {
+                const files = Array.from(e.target.files);
+                if (files.length > 0) {
+                    handleFiles(files, isBatch);
+                }
+            });
+        }
+
+        setupDragDrop(uploadZone, fileInput, false);
+        setupDragDrop(batchUploadZone, batchFileInput, true);
+
+        // 处理文件
+        function handleFiles(files, isBatch) {
+            if (isBatch) {
+                processBatchFiles(files);
+            } else {
+                const file = files[0];
+                previewImage(file);
+                predictImage(file);
+            }
+        }
+
+        // 图片预览
+        function previewImage(file) {
+            const reader = new FileReader();
+            reader.onload = e => {
+                document.getElementById('image-preview').innerHTML =
+                    `<img src="${e.target.result}" alt="Preview">
+                     <canvas class="heatmap-overlay" id="heatmap-canvas"></canvas>`;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // 单图预测
+        async function predictImage(file) {
+            document.getElementById('result-content').classList.add('hidden');
+            document.getElementById('loading').classList.add('show');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_BASE}/predict`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) throw new Error('API请求失败');
+
+                const result = await response.json();
+                // 处理新的嵌套格式
+                const data = result.success ? result.data : result;
+                showResult(data);
+            } catch (error) {
+                console.error('预测失败:', error);
+                alert('预测失败，请确保API服务已启动 (python src/api/server.py)');
+            } finally {
+                document.getElementById('loading').classList.remove('show');
+                document.getElementById('result-content').classList.remove('hidden');
+            }
+        }
+
+        // 显示结果 - 更新为支持MedMamba-Guard格式
+        function showResult(data) {
+            // 处理嵌套格式
+            const prediction = data.prediction || data.class_name || `Class ${data.prediction}`;
+            const confidence = data.confidence;
+            const riskScore = data.risk_score || data.hallucination_risk || 0;
+            const riskLevel = data.risk_level || (riskScore < 0.3 ? 'low' : riskScore < 0.5 ? 'medium' : riskScore < 0.7 ? 'high' : 'critical');
+            const riskComponents = data.risk_components || {
+                R_state: riskScore * 0.4,
+                R_scan: riskScore * 0.3,
+                R_task: riskScore * 0.2,
+                R_entropy: riskScore * 0.1
+            };
+            const reviewRegions = data.review_regions || [];
+
+            // 预测类别
+            document.getElementById('result-class').textContent = prediction;
+
+            // 置信度
+            const conf = (confidence * 100).toFixed(1);
+            document.getElementById('result-confidence').textContent = `${conf}%`;
+            document.getElementById('confidence-bar').style.width = `${conf}%`;
+
+            // 风险仪表盘
+            updateGauge(riskScore, riskLevel);
+
+            // 风险成分条形图
+            updateRiskComponents(riskComponents);
+
+            // 复核区域列表
+            updateReviewRegions(reviewRegions);
+
+            // 警告横幅
+            if (riskLevel === 'high' || riskLevel === 'critical') {
+                warningBanner.classList.add('show');
+            } else {
+                warningBanner.classList.remove('show');
+            }
+        }
+
+        // 更新仪表盘
+        function updateGauge(value, level) {
+            const gauge = document.getElementById('gauge-fill');
+            const gaugeValue = document.getElementById('gauge-value');
+            const riskBadge = document.getElementById('risk-badge');
+
+            // 圆周长
+            const circumference = 2 * Math.PI * 80; // 502.65
+
+            // 风险值映射到圆弧 (0-1 -> 0-502.65)
+            const offset = circumference * (1 - Math.min(value, 1));
+
+            gauge.style.strokeDashoffset = offset;
+            gaugeValue.textContent = value.toFixed(2);
+
+            // 颜色和标签
+            gauge.className = 'gauge-fill';
+            riskBadge.className = 'batch-item-status';
+
+            if (level === 'low') {
+                gauge.classList.add('risk-low');
+                riskBadge.classList.add('status-low');
+                riskBadge.textContent = 'LOW';
+            } else if (level === 'medium') {
+                gauge.classList.add('risk-medium');
+                riskBadge.classList.add('status-medium');
+                riskBadge.textContent = 'MEDIUM';
+            } else if (level === 'high') {
+                gauge.classList.add('risk-high');
+                riskBadge.classList.add('status-high');
+                riskBadge.textContent = 'HIGH';
+            } else {
+                gauge.classList.add('risk-critical');
+                riskBadge.classList.add('status-critical');
+                riskBadge.textContent = 'CRITICAL';
+            }
+        }
+
+        // 更新风险成分条形图
+        function updateRiskComponents(components) {
+            const maxVal = 1.0;
+            
+            // R_state
+            const rState = components.R_state || 0;
+            document.getElementById('bar-r-state').style.width = `${(rState / maxVal) * 100}%`;
+            document.getElementById('val-r-state').textContent = rState.toFixed(2);
+
+            // R_scan
+            const rScan = components.R_scan || 0;
+            document.getElementById('bar-r-scan').style.width = `${(rScan / maxVal) * 100}%`;
+            document.getElementById('val-r-scan').textContent = rScan.toFixed(2);
+
+            // R_task
+            const rTask = components.R_task || 0;
+            document.getElementById('bar-r-task').style.width = `${(rTask / maxVal) * 100}%`;
+            document.getElementById('val-r-task').textContent = rTask.toFixed(2);
+
+            // R_entropy
+            const rEntropy = components.R_entropy || 0;
+            document.getElementById('bar-r-entropy').style.width = `${(rEntropy / maxVal) * 100}%`;
+            document.getElementById('val-r-entropy').textContent = rEntropy.toFixed(2);
+        }
+
+        // 更新复核区域列表
+        function updateReviewRegions(regions) {
+            const container = document.getElementById('review-regions-list');
+            
+            if (!regions || regions.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-secondary); font-size: 0.9rem;">✅ 无高风险区域</p>';
+                return;
+            }
+
+            container.innerHTML = regions.map(region => {
+                const levelClass = region.risk_level === 'high' ? 'level-high' : 
+                                   region.risk_level === 'medium' ? 'level-medium' : 'level-low';
+                const bbox = region.bbox ? `BBOX: [${region.bbox.join(', ')}]` : '';
+                
+                return `
+                    <div class="review-region-item">
+                        <div class="review-region-header">
+                            <span class="review-region-type">${region.risk_type || 'unknown_risk'}</span>
+                            <span class="review-region-level ${levelClass}">${(region.risk_level || 'medium').toUpperCase()}</span>
+                        </div>
+                        <div class="review-region-reason">${region.reason || ''}</div>
+                        ${bbox ? `<div class="review-region-bbox">${bbox}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // 批量处理
+        let batchResults = [];
+
+        async function processBatchFiles(files) {
+            batchResults = [];
+            document.getElementById('batch-list').innerHTML =
+                '<div style="text-align: center; padding: 20px;"><div class="spinner" style="margin: 0 auto;"></div><p>开始分析...</p></div>';
+
+            document.getElementById('stat-total').textContent = files.length;
+            document.getElementById('stat-processed').textContent = '0';
+
+            let criticalCount = 0;
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const reader = new FileReader();
+
+                // 创建预览
+                reader.onload = e => {
+                    const previewUrl = e.target.result;
+                    addBatchItem(file.name, previewUrl, 'pending');
+                };
+                reader.readAsDataURL(file);
+
+                // 发送预测
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    const response = await fetch(`${API_BASE}/predict`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        const data = result.success ? result.data : result;
+                        batchResults.push(data);
+                        
+                        const riskLevel = data.risk_level || 'low';
+                        if (riskLevel === 'critical' || riskLevel === 'high') criticalCount++;
+                        
+                        updateBatchItem(file.name, data);
+                    } else {
+                        updateBatchItemError(file.name);
+                    }
+                } catch (error) {
+                    updateBatchItemError(file.name);
+                }
+
+                document.getElementById('stat-processed').textContent = i + 1;
+                document.getElementById('stat-critical-count').textContent = criticalCount;
+            }
+
+            // 更新统计
+            setTimeout(updateBatchStats, 500);
+        }
+
+        function addBatchItem(name, previewUrl, status) {
+            const list = document.getElementById('batch-list');
+            const item = document.createElement('div');
+            item.className = 'batch-item';
+            item.id = `batch-item-${name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            item.innerHTML = `
+                <img src="${previewUrl}" alt="${name}">
+                <div class="batch-item-info">
+                    <div class="batch-item-name">${name}</div>
+                    <div class="batch-item-result">处理中...</div>
+                </div>
+                <span class="batch-item-status status-low">...</span>
+            `;
+            list.appendChild(item);
+        }
+
+        function updateBatchItem(name, data) {
+            const itemId = `batch-item-${name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            const item = document.getElementById(itemId);
+            if (item) {
+                const riskScore = data.risk_score || data.hallucination_risk || 0;
+                const riskLevel = data.risk_level || (riskScore < 0.3 ? 'low' : riskScore < 0.5 ? 'medium' : 'high');
+                const prediction = data.prediction || data.class_name || 'N/A';
+                const confidence = data.confidence || 0;
+                
+                item.querySelector('.batch-item-result').textContent =
+                    `${prediction} (${(confidence * 100).toFixed(1)}%) | R: ${riskScore.toFixed(2)}`;
+                
+                const statusEl = item.querySelector('.batch-item-status');
+                statusEl.className = 'batch-item-status';
+                statusEl.classList.add(`status-${riskLevel}`);
+                statusEl.textContent = riskLevel.toUpperCase();
+            }
+        }
+
+        function updateBatchItemError(name) {
+            const itemId = `batch-item-${name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            const item = document.getElementById(itemId);
+            if (item) {
+                item.querySelector('.batch-item-result').textContent = '处理失败';
+                item.querySelector('.batch-item-status').textContent = 'ERR';
+            }
+        }
+
+        function updateBatchStats() {
+            if (batchResults.length === 0) return;
+
+            const avgRisk = batchResults.reduce((sum, r) => sum + (r.risk_score || r.hallucination_risk || 0), 0) / batchResults.length;
+
+            document.getElementById('stat-avg-risk').textContent = avgRisk.toFixed(2);
+        }
+
+        // 检查API健康状态
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                if (!response.ok) throw new Error('API不可用');
+                console.log('API服务正常 - MedMamba-Guard');
+            } catch (error) {
+                console.warn('API服务未启动，请运行: python src/api/server.py');
+            }
+        }
+
+        checkHealth();
+    </script>
+</body>
+</html>

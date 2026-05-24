@@ -1,0 +1,26 @@
+# MedMamba - CTM-Hybrid SSM医学影像分类
+
+# Core
+torch>=2.0.0
+einops>=0.7.0
+
+# 可选加速
+# mamba-ssm>=1.2.0  # 官方CUDA SSM实现(替代朴素selective_scan)
+# flash-attn>=2.0.0  # FlashAttention加速
+
+# 数据处理
+numpy>=1.21.0
+Pillow>=9.0.0
+
+# 可选服务
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+python-multipart>=0.0.6
+
+# 可选分析
+# matplotlib>=3.5.0  # 幻觉热图可视化
+# seaborn>=0.12.0
+
+# 开发
+# pytest>=7.0.0
+# black>=23.0.0

@@ -1,0 +1,160 @@
+# =============================================================================
+# MedMamba Docker Compose - 服务编排
+# =============================================================================
+# 使用:
+#   CPU版本:  docker-compose up -f docker-compose.yml cpu
+#   GPU版本:  docker-compose up -f docker-compose.yml gpu
+#   前端+后端: docker-compose up -f docker-compose.yml demo
+#   后台运行:  docker-compose up -d
+#   停止:      docker-compose down
+#
+# 端口映射:
+#   8866 - API服务
+#   8080 - 前端静态文件 (可选nginx)
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # CPU版本API服务
+  # ---------------------------------------------------------------------------
+  cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    container_name: medmamba-api-cpu
+    ports:
+      - "8866:8866"
+    volumes:
+      - ./weights:/app/weights:ro
+      - ./data:/data:ro
+    environment:
+      - DEVICE=cpu
+      - IMG_SIZE=224
+      - PORT=8866
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8866/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - medmamba-net
+
+  # ---------------------------------------------------------------------------
+  # GPU版本API服务
+  # ---------------------------------------------------------------------------
+  gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: medmamba-api-gpu
+    ports:
+      - "8867:8866"  # 映射到不同端口避免冲突
+    volumes:
+      - ./weights:/app/weights:ro
+      - ./data:/data:ro
+    environment:
+      - DEVICE=cuda
+      - IMG_SIZE=224
+      - PORT=8866
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8866/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - medmamba-net
+
+  # ---------------------------------------------------------------------------
+  # 完整演示环境 (API + 前端)
+  # ---------------------------------------------------------------------------
+  demo:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    container_name: medmamba-demo
+    ports:
+      - "8866:8866"
+    volumes:
+      - ./weights:/app/weights:ro
+      - ./data:/data:ro
+      - ./frontend:/frontend:ro
+    environment:
+      - DEVICE=cpu
+      - IMG_SIZE=224
+      - PORT=8866
+      - FRONTEND_DIR=/frontend
+    command: >
+      sh -c "python src/api/server.py &
+             echo 'API服务已启动' &&
+             tail -f /dev/null"
+    restart: unless-stopped
+    networks:
+      - medmamba-net
+
+  # ---------------------------------------------------------------------------
+  # 前端服务 (可选 - 使用nginx托管静态文件)
+  # ---------------------------------------------------------------------------
+  frontend:
+    image: nginx:alpine
+    container_name: medmamba-frontend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - cpu
+    networks:
+      - medmamba-net
+    profiles:
+      - frontend
+
+# -----------------------------------------------------------------------------
+# 网络配置
+# -----------------------------------------------------------------------------
+networks:
+  medmamba-net:
+    driver: bridge
+
+# -----------------------------------------------------------------------------
+# 使用说明:
+#
+# 1. 启动CPU版本API:
+#    docker-compose up -f docker-compose.yml cpu
+#
+# 2. 启动GPU版本API:
+#    docker-compose up -f docker-compose.yml gpu
+#
+# 3. 启动完整演示 (推荐):
+#    docker-compose up -f docker-compose.yml demo
+#
+# 4. 启动API + 前端nginx:
+#    docker-compose up -f docker-compose.yml demo frontend
+#
+# 5. 后台运行:
+#    docker-compose up -d cpu
+#
+# 6. 查看日志:
+#    docker-compose logs -f cpu
+#
+# 7. 进入容器:
+#    docker exec -it medmamba-api-cpu bash
+#
+# 8. 停止服务:
+#    docker-compose down
+#
+# 9. 重新构建镜像:
+#    docker-compose build --no-cache cpu
+# -----------------------------------------------------------------------------
