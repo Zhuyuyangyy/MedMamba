@@ -12,13 +12,67 @@
 
 ## 核心创新（4条）
 
-1. **CTM状态轨迹监控** — 首次从SSM隐藏态演化角度量化推理稳定性，通过状态激变度、响应漂移、跨层一致性和状态-输出一致性四维指标识别不稳定预测。
+### 创新点1: CTM状态轨迹监控
+**组件**: `MedMambaGuard.ctm_monitor` (src/models/ctm_monitor.py)  
+**功能**: 首次从SSM隐藏态演化角度量化推理稳定性，通过四维指标识别不稳定预测
+- **状态激变度 V_norm**: `||h_t - h_{t-1}||² / ||h_{t-1}||²` — 检测相邻层的突变
+- **输入依赖响应漂移 D_Δ**: `Var(Δ_{t-k:t+k})` — 步长序列局部方差
+- **跨层语义稳定性 C_layer**: `1 - mean(cos(h_l, h_{l-1}))` — 层间余弦相似度
+- **过度自信检测 R_overconf**: `Conf_pred * R_state` — 高置信但内部不稳定
 
-2. **Cross-Scan一致性风险图** — 将多方向扫描从特征增强扩展为可信评估，通过四方向特征散度计算定位空间不一致的高风险区域。
+**公式**: `R_state = α*V_norm + β*D_Δ + γ*(1-C_layer) + δ*R_overconf`
 
-3. **分类-分割互证门控** — 检测模型内部自相矛盾的输出，当分类置信度与分割空间证据冲突时触发硬门控规则。
+### 创新点2: Cross-Scan一致性风险图
+**组件**: `MedMambaGuard.scan_analyzer` (src/models/cross_scan_risk.py)  
+**功能**: 将多方向扫描从特征增强扩展为可信评估，定位空间不一致的高风险区域
+- **L2散度**: `Risk_l2 = mean(||f_k - μ||²)` — 四方向特征与均值的方差
+- **余弦散度**: `Risk_cos = 1 - mean(cos(f_k, μ))` — 方向一致性
 
-4. **医生复核风险审计** — 输出风险热力图、复核建议和可追溯日志，支持AI决策全流程透明化。
+**公式**: `R_scan = λ₁*Risk_l2 + λ₂*Risk_cos`
+
+### 创新点3: 分类-分割互证门控
+**组件**: `MedMambaGuard.task_validator` (src/models/task_conflict_validator.py)  
+**功能**: 检测模型内部自相矛盾的输出，当分类置信度与分割空间证据冲突时触发门控
+- **空间面积冲突**: `|P_cls - E_seg|`
+- **紧凑度冲突**: 分割区域形状一致性
+- **边界冲突**: 分割边界与分类决策的不一致
+
+### 创新点4: 医生复核风险审计
+**组件**: `MedMambaGuard.hard_gating` (src/models/medmamba_guard.py)  
+**功能**: 输出风险热力图、复核建议和可追溯日志，支持AI决策全流程透明化
+
+**硬门控规则**:
+```python
+if R_total > θ_high(0.7): action = doctor_review
+if R_task > θ_conflict(0.4): action = doctor_review  
+if confidence > θ_conf(0.85) and R_state > θ_state(0.5): action = overconfidence_warning
+```
+
+**综合风险公式**: `R_total = w_state*R_state + w_scan*R_scan + w_task*R_task + w_entropy*R_entropy`
+
+### 消融实验验证
+
+四创新点可通过以下命令独立验证:
+
+```bash
+# 验证全部创新点
+python scripts/run_ablation_study.py --component=all --dataset=synthetic
+
+# 单独验证各创新点
+python scripts/run_ablation_study.py --component=ctm --dataset=synthetic        # 创新点1
+python scripts/run_ablation_study.py --component=cross-scan --dataset=synthetic   # 创新点2
+python scripts/run_ablation_study.py --component=clDice --dataset=synthetic       # 创新点3
+python scripts/run_ablation_study.py --component=safe-mamba --dataset=synthetic   # 创新点4
+```
+
+消融实验对应关系:
+| 实验名 | 禁用组件 | 验证的创新点 |
+|--------|---------|-------------|
+| `w/o_CTM` | CTMMonitor | 创新点1: CTM状态轨迹监控 |
+| `w/o_CrossScan` | CrossScanRiskAnalyzer | 创新点2: Cross-Scan一致性 |
+| `w/o_clDice` | TaskConflictValidator | 创新点3: 分类-分割互证 |
+| `w/o_SafeMamba` | HardGatingRules | 创新点4: 医生复核审计 |
+| `Baseline` | 无Guard | 标准MedMamba无Guard版本 |
 
 ## 技术架构
 

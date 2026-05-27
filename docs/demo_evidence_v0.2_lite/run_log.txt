@@ -1,5 +1,0 @@
-MedMamba-Guard V0.2 Synthetic Smoke Experiment Log
-Date: 2026-05-17 01:36:33
-Image size: 32
-d_model: 32, n_layers: 2
-Total samples: 20

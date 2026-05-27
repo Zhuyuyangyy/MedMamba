@@ -268,22 +268,12 @@ for k, v in results.items():
         ;;
 
     ablation)
-        echo -e "${CYAN}[ABLATION] 消融实验...${NC}"
+        echo -e "${CYAN}[ABLATION] 消融实验 - 四创新点独立验证...${NC}"
         echo ""
-        echo -e "${YELLOW}运行消融实验 (CTM/Cross-Scan/互证门控)...${NC}"
-        $PYTHON -c "
-import sys
-sys.path.insert(0, '.')
-from src.evaluator import AblationStudy
-
-study = AblationStudy()
-results = study.run()
-print('Ablation Study Results:')
-for config, metrics in results.items():
-    print(f'  {config}:')
-    for k, v in metrics.items():
-        print(f'    {k}: {v:.4f}')
-"
+        echo -e "${YELLOW}支持: --component=all|ctm|cross-scan|clDice|safe-mamba${NC}"
+        echo -e "${YELLOW}运行消融实验...${NC}"
+        shift
+        $PYTHON scripts/run_ablation_study.py "$@"
         ;;
 
     *)
