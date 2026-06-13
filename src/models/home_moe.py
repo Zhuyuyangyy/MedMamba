@@ -387,7 +387,7 @@ class HierarchicalMoEBlock(nn.Module):
             d_model=d_model,
             num_experts=num_experts,
             routing_type=routing_type,
-            dropout=dropout,
+            expert_dropout=dropout,
         )
         
         # 3D归一化
@@ -457,7 +457,7 @@ class HoMEMoE2D(nn.Module):
                 num_layers=1,
                 routing_type=routing_type,
                 top_k=top_k,
-                dropout=dropout,
+                expert_dropout=dropout,
             )
             for _ in range(depth)
         ])
@@ -652,10 +652,10 @@ class MoEEnsemble(nn.Module):
             stacked = torch.stack(transformed, dim=1)  # [B, num_experts, L, D]
             B, n_exp, L, D = stacked.shape
             stacked_flat = stacked.reshape(B * n_exp, L, D)
-            
+
             # Self-attention
             output, _ = self.attention(stacked_flat, stacked_flat, stacked_flat)
-            output = output.mean(dim=0)  # 合并expert维度
+            output = output.reshape(B, n_exp, L, D).mean(dim=1)  # [B, L, D]
         
         return output
 

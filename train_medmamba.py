@@ -34,6 +34,7 @@ import time
 import json
 import random
 import argparse
+import numpy as np
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 from dataclasses import dataclass, asdict
@@ -45,7 +46,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler, CosineAnnealingLR, StepLR
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import autocast
 import torch.distributed as dist
 
 # 尝试导入tensorboard
@@ -495,7 +496,7 @@ class MedMambaTrainer:
         self.scheduler = self._create_scheduler()
         
         # AMP
-        self.scaler = GradScaler() if config.use_amp else None
+        self.scaler = torch.amp.GradScaler('cuda') if config.use_amp else None
         
         # Mixup/Cutmix
         self.mixup = None
@@ -616,24 +617,25 @@ class MedMambaTrainer:
                 labels_a, labels_b, lam = labels, labels, 1.0
             
             self.optimizer.zero_grad()
-            
+
             # 前向传播
             if self.scaler is not None:
                 with autocast():
                     outputs = self.model(images)
-                    
+
                     if isinstance(outputs, dict):
                         logits = outputs.get('logits') or outputs.get('cls_logits')
                     else:
                         logits = outputs
-                    
+
                     if use_mix or use_cut:
-                        loss_a = self.criterion(logits, labels_a)
-                        loss_b = self.criterion(logits, labels_b)
+                        # Mixup/Cutmix只用任务损失, 不用CTM/MoE辅助损失
+                        loss_a = self.criterion.task_loss(logits, labels_a)
+                        loss_b = self.criterion.task_loss(logits, labels_b)
                         loss = lam * loss_a + (1 - lam) * loss_b
                     else:
                         loss, _ = self.criterion(outputs, labels, None)
-                
+
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
@@ -641,19 +643,20 @@ class MedMambaTrainer:
                 self.scaler.update()
             else:
                 outputs = self.model(images)
-                
+
                 if isinstance(outputs, dict):
                     logits = outputs.get('logits') or outputs.get('cls_logits')
                 else:
                     logits = outputs
-                
+
                 if use_mix or use_cut:
-                    loss_a = self.criterion(logits, labels_a)
-                    loss_b = self.criterion(logits, labels_b)
+                    # Mixup/Cutmix只用任务损失, 不用CTM/MoE辅助损失
+                    loss_a = self.criterion.task_loss(logits, labels_a)
+                    loss_b = self.criterion.task_loss(logits, labels_b)
                     loss = lam * loss_a + (1 - lam) * loss_b
                 else:
                     loss, _ = self.criterion(outputs, labels, None)
-                
+
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
                 self.optimizer.step()

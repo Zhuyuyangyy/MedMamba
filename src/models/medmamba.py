@@ -43,53 +43,18 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(d_model))
 
     def forward(self, x):
-        norm = x.pow(2).mean(-1, keepdim=True).add(self.eps).rsqrt()
-        return x * norm * self.weight
+        if x.dim() == 4:
+            norm = x.pow(2).mean(-1, keepdim=True).add(self.eps).rsqrt()
+            return x * norm * self.weight.view(1, -1, 1, 1)
+        else:
+            norm = x.pow(2).mean(-1, keepdim=True).add(self.eps).rsqrt()
+            return x * norm * self.weight
 
 
 # =============================================================================
-# Cross-Scan (VMamba核心) - 四方向扫描让1D SSM适应2D图像
+# 注: CrossScan / CrossMerge / VSSBlock2D / SS2D / VMamba2D
+#     统一从 vmamba_blocks.py 导入 (见文件顶部 import)
 # =============================================================================
-
-class CrossScan(nn.Module):
-    """
-    四方向扫描 - 将2D图像展分为4条1D序列
-    每个像素从四个方向汇聚信息，实现全局感受野
-    """
-    
-    def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
-        """
-        x: [B, C, H, W]
-        returns: 4条扫描序列, 各 [B, C, H*W]
-        """
-        B, C, H, W = x.shape
-        x_flat = x.view(B, C, H * W)  #  raster: 左上→右下
-        
-        return [
-            x_flat,  # 方向1: 左上→右下
-            torch.flip(x_flat, dims=[-1]),  # 方向2: 右下→左上
-            x.transpose(2, 3).reshape(B, C, H * W),  # 方向3: 右上→左下
-            torch.flip(x.transpose(2, 3).reshape(B, C, H * W), dims=[-1]),  # 方向4: 左下→右上
-        ]
-
-
-class CrossMerge(nn.Module):
-    """四方向扫描结果合并"""
-    
-    def forward(self, scans: List[torch.Tensor], H: int, W: int) -> torch.Tensor:
-        """scans: 4×[B, C, H*W] → [B, C, H, W]"""
-        B, C, L = scans[0].shape
-        
-        # 反转各方向
-        out = [
-            scans[0].view(B, C, H, W),
-            torch.flip(scans[1], dims=[-1]).view(B, C, H, W),
-            scans[2].view(B, C, W, H).transpose(2, 3),
-            torch.flip(scans[3], dims=[-1]).view(B, C, W, H).transpose(2, 3),
-        ]
-        
-        return sum(out)
-
 
 # =============================================================================
 # SSM核心 - 选择性状态空间 (Mamba)
@@ -203,64 +168,8 @@ class MambaBlock2D(nn.Module):
         return x + self.dropout(y)
 
 
-# =============================================================================
-# VMamba风格的2D SSM层
-# =============================================================================
-
-class VSSBlock2D(nn.Module):
-    """
-    视觉状态空间块 - 四方向SSM处理2D图像
-    完整流程: CrossScan → 4×SSM → CrossMerge
-    """
-    
-    def __init__(
-        self,
-        d_model: int,
-        d_state: int = 16,
-        d_conv: int = 4,
-        expand: int = 2,
-        dropout: float = 0.1,
-    ):
-        super().__init__()
-        self.cross_scan = CrossScan()
-        self.cross_merge = CrossMerge()
-        
-        # 4个方向各一个Mamba Block (参数共享)
-        self.ssm = MambaBlock2D(
-            d_model=d_model,
-            d_state=d_state,
-            d_conv=d_conv,
-            expand=expand,
-            dropout=dropout,
-        )
-        
-        # 方向权重 (可学习)
-        self.direction_weight = nn.Parameter(torch.ones(4) / 4)
-        
-        self.H = None
-        self.W = None
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        x: [B, C, H, W]
-        """
-        self.H, self.W = x.shape[2], x.shape[3]
-        
-        # 四方向扫描
-        scans = self.cross_scan(x)  # 4 × [B, C, L]
-        
-        # 并行SSM处理
-        processed = [self.ssm(s) for s in scans]
-        
-        # 加权融合
-        weights = torch.softmax(self.direction_weight, dim=0)
-        fused = sum(w * p for w, p in zip(weights, processed))
-        
-        # 合并回2D
-        out = self.cross_merge([fused], self.H, self.W)
-        
-        return out
-
+# 注: VSSBlock2D 已从 vmamba_blocks.py 统一导入 (见文件顶部)
+# DualBranchEncoder 使用导入的 VSSBlock2D (内部使用 SS2D + CrossScan/CrossMerge)
 
 # =============================================================================
 # CNN分支 (U-Mamba启发) - 局部特征
@@ -320,62 +229,7 @@ class CNNBranch(nn.Module):
         return out + residual
 
 
-# =============================================================================
-# CTM轨迹分析器 (从CTM-Guard移植)
-# =============================================================================
-
-class CTMTrajectoryAnalyzer(nn.Module):
-    """
-    CTM动力学轨迹分析 - 监控SSM隐藏态稳定性
-    用稳定性/振荡/冲突作为幻觉风险信号
-    """
-    
-    def __init__(self, d_model: int, num_ticks: int = 8):
-        super().__init__()
-        self.d_model = d_model
-        self.num_ticks = num_ticks
-        
-        # 轨迹→指标投影
-        self.stability_proj = nn.Linear(d_model, 1)
-        self.oscillation_proj = nn.Linear(d_model, 1)
-        self.conflict_proj = nn.Linear(d_model, 1)
-    
-    def forward(self, trajectory: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """
-        trajectory: [B, T, D] - SSM状态序列 (T=时间步/层序号)
-        """
-        T = trajectory.shape[1]
-        k = min(self.num_ticks, T)
-        last_k = trajectory[:, -k:, :]  # [B, k, D]
-        
-        # 稳定性: 最后k步范数均值的倒数
-        last_norms = torch.norm(last_k, dim=-1)
-        stability = 1.0 / (1.0 + last_norms.mean(dim=-1))
-        
-        # 振荡: 相邻时间步差的方差
-        deltas = torch.norm(torch.diff(last_k, dim=1), dim=-1)
-        oscillation = deltas.std(dim=-1)
-        
-        # 吸引子margin: top1 - top2
-        final = trajectory[:, -1, :]
-        sorted_final, _ = final.sort(dim=-1, descending=True)
-        attractor_margin = (sorted_final[:, 0] - sorted_final[:, 1]).abs()
-        
-        return {
-            "stability": stability,
-            "oscillation": oscillation,
-            "attractor_margin": attractor_margin,
-        }
-    
-    def hallucination_score(self, trajectory: torch.Tensor) -> torch.Tensor:
-        """综合幻觉风险分数 0=可信, 1=高风险"""
-        m = self.forward(trajectory)
-        return (
-            (1 - m["stability"]) * 0.4 +
-            m["oscillation"] * 0.3 +
-            (1 - torch.sigmoid(m["attractor_margin"])) * 0.3
-        ).clamp(0, 1)
-
+# 注: CTMTrajectoryAnalyzer 已从 home_moe.py 统一导入 (见文件顶部)
 
 # =============================================================================
 # 特征融合模块 (TransMamba启发)
@@ -449,8 +303,8 @@ class DualBranchEncoder(nn.Module):
         self.d_model = d_model
         self.n_layers = n_layers
         
-        # 投影头: 将输入映射到d_model
-        self.input_proj = nn.Conv2d(3, d_model, kernel_size=1)
+        # 投影头: 将输入映射到d_model (输入已被patch_embed投影为d_model通道)
+        self.input_proj = nn.Conv2d(d_model, d_model, kernel_size=1)
         
         # SSM分支 (四方向扫描)
         self.ssm_branch = nn.ModuleList([
@@ -481,7 +335,7 @@ class DualBranchEncoder(nn.Module):
     
     def forward(self, x: torch.Tensor, return_ctm: bool = False) -> Tuple[torch.Tensor, Optional[Dict]]:
         """
-        x: [B, 3, H, W]
+        x: [B, d_model, H, W]
         return: (encoded, ctm_metrics)
         """
         B, C, H, W = x.shape
@@ -637,15 +491,28 @@ class MedMambaV2(nn.Module):
             in_channels, d_model,
             kernel_size=patch_size, stride=patch_size,
         )
-        
-        # 可学习cls token
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        
+
+        # 全局语义注入: 使用可学习通道注意力替代无效的cls_token
+        # (原始cls_token在空间特征图[B,C,H,W]上无法直接拼接，
+        #  改为SE-style通道注意力实现全局语义聚合)
+        self.global_semantic = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(1),
+            nn.Linear(d_model, d_model // 4),
+            nn.SiLU(inplace=True),
+            nn.Linear(d_model // 4, d_model),
+            nn.Sigmoid(),
+        )
+
         self._init_weights()
-    
+
     def _init_weights(self):
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
-    
+        for m in self.global_semantic:
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, std=0.02)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
     def forward(
         self,
         x: torch.Tensor,
@@ -658,26 +525,23 @@ class MedMambaV2(nn.Module):
         return_ctm: 是否返回CTM幻觉风险分数
         """
         B = x.shape[0]
-        
+
         # Patch embedding
         x = self.patch_embed(x)  # [B, d_model, H/P, W/P]
-        
-        # 添加cls token
-        cls_tokens = self.cls_token.expand(B, -1, -1)
-        
+
         # 编码
         x, ctm_score = self.encoder(x, return_ctm=return_ctm)
-        
-        # 将x转为[B, C, H, W]格式给head
-        # cls token信息注入到全局特征
-        cls_out = x.mean(dim=(2, 3), keepdim=True)  # [B, C, 1, 1]
-        x = x + cls_out  # 注入全局语义
-        
+
+        # 全局语义注入: SE-style通道注意力
+        # 比原始mean+add更有效, 为每个通道学习自适应缩放
+        channel_weights = self.global_semantic(x)  # [B, d_model]
+        x = x * channel_weights.unsqueeze(-1).unsqueeze(-1)  # [B, C, H, W]
+
         result = self.head(x, task=task if task != "both" else "classification")
-        
+
         if return_ctm and ctm_score is not None:
             result["hallucination_risk"] = ctm_score
-        
+
         return result
 
 
@@ -733,18 +597,22 @@ class MedMambaV3(nn.Module):
             kernel_size=patch_size, stride=patch_size,
         )
         
-        # VMamba编码器
-        self.vmamba_encoder = VMamba2D(
-            d_model=d_model,
-            depth=n_layers,
-            d_state=d_state,
-            d_conv=d_conv,
-            expand=expand,
-            dropout=dropout,
-            use_cross_attn=True,  # 启用CNN-SSM融合
-        )
-        
-        # CNN分支 (局部特征)
+        # VMamba编码器: 每层一个VSSBlock2D (带Cross-Attention融合)
+        # 使用depth=1的VMamba2D, 在forward中逐层调用
+        self.vmamba_blocks = nn.ModuleList([
+            VMamba2D(
+                d_model=d_model,
+                depth=1,
+                d_state=d_state,
+                d_conv=d_conv,
+                expand=expand,
+                dropout=dropout,
+                use_cross_attn=True,  # 启用CNN-SSM融合
+            )
+            for _ in range(n_layers)
+        ])
+
+        # CNN分支 (局部特征, 每2层执行一次)
         self.cnn_branch = nn.ModuleList([
             CNNBranch(d_model, d_state)
             for _ in range(n_layers)
@@ -772,13 +640,26 @@ class MedMambaV3(nn.Module):
         # 分类/分割头
         self.head = MedMambaHead(d_model, num_classes, num_diseases)
         
-        # 可学习cls token
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        
+        # 全局语义注入: 使用SE通道注意力替代无效的cls_token
+        # (cls_token在空间特征图[B,C,H,W]上无法直接拼接,
+        #  改为SE-style通道注意力实现全局语义聚合)
+        self.global_semantic = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(1),
+            nn.Linear(d_model, d_model // 4),
+            nn.SiLU(inplace=True),
+            nn.Linear(d_model // 4, d_model),
+            nn.Sigmoid(),
+        )
+
         self._init_weights()
-    
+
     def _init_weights(self):
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        for m in self.global_semantic:
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, std=0.02)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
     
     def forward(
         self,
@@ -794,16 +675,12 @@ class MedMambaV3(nn.Module):
         # Patch embedding
         x = self.patch_embed(x)  # [B, d_model, H/P, W/P]
         
-        # CNN分支 (每2层执行一次)
-        cnn_feats = []
-        for i, cnn in enumerate(self.cnn_branch):
-            if i % 2 == 0:
-                cnn_feats.append(cnn(x))
-        
-        # VMamba编码 (带CNN融合)
+        # 逐层处理: SSM + 可选CNN融合
         ssm_feat = x
-        for i, cnn_feat in enumerate(cnn_feats):
-            ssm_feat = self.vmamba_encoder(ssm_feat, cnn_feat)
+        for i in range(len(self.vmamba_blocks)):
+            # 每2层执行一次CNN分支
+            cnn_feat = self.cnn_branch[i](ssm_feat) if i % 2 == 0 else None
+            ssm_feat = self.vmamba_blocks[i](ssm_feat, cnn_feat)
         
         # HoME-MoE处理
         moe_routing = None
@@ -812,9 +689,9 @@ class MedMambaV3(nn.Module):
         else:
             moe_feat = ssm_feat
         
-        # 注入cls token信息
-        cls_out = moe_feat.mean(dim=(2, 3), keepdim=True)
-        moe_feat = moe_feat + cls_out
+        # 全局语义注入: SE-style通道注意力
+        channel_weights = self.global_semantic(moe_feat)  # [B, d_model]
+        moe_feat = moe_feat * channel_weights.unsqueeze(-1).unsqueeze(-1)  # [B, C, H, W]
         
         # CTM分析
         ctm_score = None

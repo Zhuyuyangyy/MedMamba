@@ -1,26 +1,49 @@
-# MedMamba - CTM-Hybrid SSM医学影像分类
+# =============================================================================
+# MedMamba-Guard - CTM-Hybrid SSM Medical Imaging Classification
+# =============================================================================
 
-# Core
+# Core Deep Learning
 torch>=2.0.0
 einops>=0.7.0
 
-# 可选加速
-# mamba-ssm>=1.2.0  # 官方CUDA SSM实现(替代朴素selective_scan)
-# flash-attn>=2.0.0  # FlashAttention加速
-
-# 数据处理
+# Data Processing
 numpy>=1.21.0
 Pillow>=9.0.0
+opencv-python>=4.5.0
 
-# 可选服务
+# Medical Imaging
+pydicom>=2.3.0
+
+# API & Web Service
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
 python-multipart>=0.0.6
 
-# 可选分析
-# matplotlib>=3.5.0  # 幻觉热图可视化
-# seaborn>=0.12.0
+# Evaluation & Metrics
+scikit-learn>=1.0.0
+scipy>=1.7.0
 
-# 开发
-# pytest>=7.0.0
-# black>=23.0.0
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.12.0
+
+# =============================================================================
+# Development & Testing
+# =============================================================================
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-xdist>=3.0.0
+ruff>=0.1.0
+
+# =============================================================================
+# Optional Acceleration (uncomment if available)
+# =============================================================================
+# mamba-ssm>=1.2.0       # Official CUDA SSM implementation
+# flash-attn>=2.0.0      # FlashAttention acceleration
+# triton>=2.0.0           # Triton compiler for custom kernels
+
+# =============================================================================
+# Optional Logging & Experiment Tracking
+# =============================================================================
+# wandb>=0.15.0           # Weights & Biases experiment tracking
+# tensorboard>=2.10.0     # TensorBoard logging

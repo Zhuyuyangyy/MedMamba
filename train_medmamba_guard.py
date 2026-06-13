@@ -34,7 +34,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler, CosineAnnealingLR, StepLR
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import autocast
 import torch.distributed as dist
 import numpy as np
 
@@ -172,7 +172,7 @@ class MedMambaGuardTrainer:
         # 优化器
         self.optimizer = self._create_optimizer()
         self.scheduler = self._create_scheduler()
-        self.scaler = GradScaler() if device == "cuda" else None
+        self.scaler = torch.amp.GradScaler('cuda') if device == "cuda" else None
         
         # 损失函数
         self.criterion = nn.CrossEntropyLoss()

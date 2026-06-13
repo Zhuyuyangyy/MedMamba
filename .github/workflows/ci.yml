@@ -1,7 +1,8 @@
 name: CI
+
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
     branches: [main]
 
@@ -12,16 +13,57 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.10"
       - run: pip install ruff
-      - run: ruff check .
+      - run: ruff check . --output-format=github
+      - run: ruff format --check .
 
   test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=src --cov-report=xml --cov-report=term-missing --cov-fail-under=80
+      - name: Upload coverage report
+        if: matrix.python-version == '3.10'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: pip install pytest
-      - run: pytest tests/ -x || echo "No tests yet"
+          python-version: "3.10"
+      - name: Install safety
+        run: pip install safety bandit
+      - name: Check dependencies
+        run: safety check -r requirements.txt || true
+      - name: Run bandit security linter
+        run: bandit -r src/ -ll || true
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CPU Docker image
+        run: docker build -f Dockerfile.cpu -t medmamba:cpu .
+      - name: Test CPU Docker image
+        run: |
+          docker run --rm medmamba:cpu python -c "from src.models.medmamba_guard import MedMambaGuard; print('Docker image OK')"

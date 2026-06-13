@@ -15,6 +15,7 @@ import os
 import time
 import json
 import copy
+import random
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -26,7 +27,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler, CosineAnnealingLR, StepLR
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import autocast
 import torch.distributed as dist
 
 # 尝试导入wandb
@@ -308,7 +309,7 @@ class Trainer:
             self.scheduler = scheduler
         
         # AMP
-        self.scaler = GradScaler() if config.use_amp else None
+        self.scaler = torch.amp.GradScaler('cuda') if config.use_amp else None
         
         # Mixup/Cutmix
         if config.use_mixup:
@@ -428,32 +429,47 @@ class Trainer:
             # Mixup/Cutmix
             if self.mixup is not None and random.random() < 0.5:
                 images, labels_a, labels_b, lam = self.mixup(images, labels)
-                
+
                 # 前向传播
                 self.optimizer.zero_grad()
-                
+
                 if self.scaler is not None:
                     with autocast():
                         outputs = self.model(images)
-                        loss_a = self.criterion(outputs, labels_a)
-                        loss_b = self.criterion(outputs, labels_b)
+                        if isinstance(outputs, dict):
+                            logits = outputs.get('logits') or outputs.get('cls_logits')
+                        else:
+                            logits = outputs
+                        loss_a = self.criterion(logits, labels_a)
+                        loss_b = self.criterion(logits, labels_b)
                         loss = lam * loss_a + (1 - lam) * loss_b
                 else:
                     outputs = self.model(images)
-                    loss_a = self.criterion(outputs, labels_a)
-                    loss_b = self.criterion(outputs, labels_b)
+                    if isinstance(outputs, dict):
+                        logits = outputs.get('logits') or outputs.get('cls_logits')
+                    else:
+                        logits = outputs
+                    loss_a = self.criterion(logits, labels_a)
+                    loss_b = self.criterion(logits, labels_b)
                     loss = lam * loss_a + (1 - lam) * loss_b
-                
-                self.scaler.scale(loss).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-                
+
+                if self.scaler is not None:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.config.gradient_clip
+                    )
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.config.gradient_clip
+                    )
+                    self.optimizer.step()
+
                 # 更新指标
-                self.train_metrics.update(
-                    loss.item(),
-                    outputs if isinstance(outputs, torch.Tensor) else outputs['logits'],
-                    labels_a,  # 使用原始标签计算准确率
-                )
+                self.train_metrics.update(loss.item(), logits, labels_a)
             else:
                 # 标准训练
                 self.optimizer.zero_grad()
