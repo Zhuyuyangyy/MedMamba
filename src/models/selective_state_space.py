@@ -55,6 +55,9 @@ class MambaBlock(nn.Module):
         self.d_conv = d_conv
         self.d_inner = int(expand * d_model)
         self.dt_rank = dt_rank if dt_rank != "auto" else max(d_model // 16, 1)
+        self.dt_min = dt_min
+        self.dt_max = dt_max
+        self.dt_init = dt_init
         self.variant = variant
         
         # 输入投影
@@ -71,9 +74,9 @@ class MambaBlock(nn.Module):
         )
         
         # SSM参数投影
-        # x -> (dt, B, C)
-        self.dt_proj = nn.Linear(self.d_inner, self.dt_rank, bias=True)
-        self.dt_proj_bias = nn.Parameter(torch.ones(self.dt_rank) * 0.1)
+        # dt_proj: dt_rank -> d_inner (生成每个通道的dt)
+        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True)
+        self.dt_proj_bias = nn.Parameter(torch.ones(self.d_inner) * 0.1)
         
         # B, C参数 (d_inner -> d_state * 2)
         self.x_proj = nn.Linear(self.d_inner, self.dt_rank + d_state * 2, bias=False)
@@ -106,58 +109,70 @@ class MambaBlock(nn.Module):
         nn.init.xavier_uniform_(self.out_proj.weight)
         nn.init.xavier_uniform_(self.dt_proj.weight)
         nn.init.xavier_uniform_(self.x_proj.weight)
-        
-        # dt初始化
+
+        # dt初始化 - 参考Mamba原论文: inv_dt = dt + log(1 - exp(-dt))
+        # 对于小dt (0.001~0.1), inv_dt为负值.
+        # 展开到 d_inner 维以匹配 dt_proj_bias 形状.
         dt = torch.exp(torch.rand(self.dt_rank) * (math.log(self.dt_max) - math.log(self.dt_min)) + math.log(self.dt_min))
         inv_dt = dt + torch.log(-torch.expm1(-dt))
-        nn.init.uniform_(self.dt_proj_bias, -inv_dt.sum() / self.dt_rank, inv_dt.sum() / self.dt_rank)
-        
+        # 广播: 同一dt_rank值对应d_inner/ dt_rank个通道
+        repeat_factor = max(self.d_inner // self.dt_rank, 1)
+        inv_dt_full = inv_dt.repeat_interleave(repeat_factor)[:self.d_inner]
+        with torch.no_grad():
+            self.dt_proj_bias.copy_(inv_dt_full)
+
         # D初始化
         nn.init.uniform_(self.D, -0.5, 0.5)
     
-    def selective_scan(self, x: torch.Tensor, dt: torch.Tensor, A: torch.Tensor, 
+    def selective_scan(self, x: torch.Tensor, dt: torch.Tensor, A: torch.Tensor,
                        B: torch.Tensor, C: torch.Tensor, D: torch.Tensor) -> torch.Tensor:
         """
         选择性扫描算法 - O(n)线性复杂度
-        
+
         SSM核心公式:
         h' = A·h + B·x  (状态更新)
         y  = C·h + D·x  (输出)
-        
-        其中A,B,C,Δ都由输入数据动态决定
+
+        其中A,B,C,Δ都由输入数据动态决定.
+
+        形状约定:
+            x:    [B, L, d_inner]
+            dt:   [B, L, d_inner]
+            A:    [d_inner, d_state]
+            B:    [B, L, d_state]
+            C:    [B, L, d_state]
+            D:    [d_inner]
         """
-        batch, seqlen, dim = x.shape
+        batch, seqlen, _ = x.shape
         d_state = A.shape[1]
-        
+
         # 离散化: 将连续系统转换为离散系统
         # Δ' = softplus(dt) 限制Δ > 0
         dt = F.softplus(dt + self.dt_proj_bias)
-        
-        # 离散A: A_discrete = exp(Δ·A)
-        # 这步是O(n)的关键 - 利用指数的性质
-        A_discrete = torch.exp(torch.einsum('bdt,dnd->btdn', dt, A))
-        
-        # 离散B: B_discrete = Δ·B
-        B_discrete = torch.einsum('bdt,bd->btd', dt, B)
-        
+
+        # 离散A: A_discrete[i] = exp(Δ_i · A), 形状 [B, L, d_inner, d_state]
+        A_discrete = torch.exp(dt.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(0))
+
+        # 离散B: B_discrete[i] = Δ_i · B_i, 形状 [B, L, d_state] (广播 dt 到 d_inner 维度)
+        # 为与h形状匹配, 这里扩展B_discrete到 [B, L, 1, d_state]
+        B_discrete = dt.unsqueeze(-1) * B.unsqueeze(2)  # [B, L, d_inner, d_state]
+
         # 展开: 沿着序列维度展开SSM
-        # 状态h: [batch, seqlen, dim, d_state]
-        # 最终输出: 使用C对状态加权求和
-        
-        # 简化的硬件感知扫描(使用并行前缀)
-        # 这里用naive实现保证正确性
-        h = torch.zeros(batch, dim, d_state, device=x.device, dtype=x.dtype)
+        # 状态h: [batch, d_inner, d_state]
+        h = torch.zeros(batch, x.shape[-1], d_state, device=x.device, dtype=x.dtype)
         ys = []
-        
+
         for i in range(seqlen):
-            # h' = A·h + B·x
-            h = torch.einsum('bnd,dn->bd', h, A_discrete[:, i]) + \
-                torch.einsum('bd,dn->bd', x[:, i], B_discrete[:, i])
-            
-            # y = C·h + D·x
-            y = torch.einsum('bd,dn->bn', h, C) + D * x[:, i]
+            # h' = A * h + B * x   (按 d_state 逐元素)
+            # A_discrete[:, i]: [B, d_inner, d_state], h: [B, d_inner, d_state]
+            h = A_discrete[:, i] * h + B_discrete[:, i] * x[:, i].unsqueeze(-1)
+
+            # y = C · h + D * x
+            # h: [B, d_inner, d_state], C[:, i]: [B, d_state]
+            # 在 d_state 维上做内积 -> [B, d_inner]
+            y = torch.einsum('bnd,bd->bn', h, C[:, i]) + D * x[:, i]
             ys.append(y)
-        
+
         return torch.stack(ys, dim=1)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -184,7 +199,7 @@ class MambaBlock(nn.Module):
             [self.dt_rank, self.d_state, self.d_state], 
             dim=-1
         )
-        dt = self.dt_proj(dt)  # [B, L, dt_rank]
+        dt = self.dt_proj(dt)  # [B, L, d_inner]
         self.last_delta = dt.detach()  # CTM monitoring cache
         
         # A矩阵 (可训练参数)

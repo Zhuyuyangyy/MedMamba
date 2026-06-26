@@ -585,3 +585,9 @@ class DataLoaderFactory:
         )
         
         return train_loader, val_loader, test_loader
+
+
+# Public API alias used by tests / external scripts.
+# The canonical class is MedMambaDataset; MedicalImageDataset is provided for
+# naming consistency with the medical-imaging literature.
+MedicalImageDataset = MedMambaDataset

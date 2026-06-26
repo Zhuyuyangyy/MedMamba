@@ -93,8 +93,9 @@ class MambaBlock2D(nn.Module):
         )
         
         # SSM参数
-        self.dt_proj = nn.Linear(self.d_inner, self.dt_rank, bias=True)
-        self.dt_proj_bias = nn.Parameter(torch.ones(self.dt_rank) * 0.1)
+        # dt_proj: dt_rank -> d_inner (生成每个通道的dt)
+        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True)
+        self.dt_proj_bias = nn.Parameter(torch.ones(self.d_inner) * 0.1)
         self.x_proj = nn.Linear(self.d_inner, self.dt_rank + d_state * 2, bias=False)
         
         # A矩阵
@@ -118,10 +119,14 @@ class MambaBlock2D(nn.Module):
         for m in [self.in_proj, self.out_proj, self.dt_proj, self.x_proj]:
             if m is not None:
                 nn.init.xavier_uniform_(m.weight)
-        
+
+        # dt初始化 - 参考Mamba原论文 (dt_proj_bias 形状 = d_inner)
         dt = torch.exp(torch.rand(self.dt_rank) * (math.log(0.1) - math.log(0.001)) + math.log(0.001))
         inv_dt = dt + torch.log(-torch.expm1(-dt))
-        nn.init.uniform_(self.dt_proj_bias, -inv_dt.sum() / self.dt_rank, inv_dt.sum() / self.dt_rank)
+        repeat_factor = max(self.d_inner // self.dt_rank, 1)
+        inv_dt_full = inv_dt.repeat_interleave(repeat_factor)[:self.d_inner]
+        with torch.no_grad():
+            self.dt_proj_bias.copy_(inv_dt_full)
         nn.init.uniform_(self.D, -0.5, 0.5)
 
     def selective_scan(self, x: torch.Tensor) -> torch.Tensor:
@@ -139,20 +144,23 @@ class MambaBlock2D(nn.Module):
         # SSM参数
         x_dbl = self.x_proj(x_conv)
         dt, B_param, C = torch.split(x_dbl, [self.dt_rank, d_state, d_state], dim=-1)
-        dt = self.dt_proj(dt)
+        dt = self.dt_proj(dt)  # [B, L, d_inner]
 
-        A = -torch.exp(self.A_log.float())
+        A = -torch.exp(self.A_log.float())  # [d_inner, d_state]
         dt = F.softplus(dt + self.dt_proj_bias)
 
-        # 展开扫描 (生产环境用cuDSSM)
-        A_d = torch.exp(torch.einsum('bdt,dnd->btdn', dt, A))
-        B_d = torch.einsum('bdt,bd->btd', dt, B_param)
+        # 离散 A: [B, L, d_inner, d_state]
+        A_d = torch.exp(dt.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(0))
+        # 离散 B: [B, L, d_inner, d_state] (broadcast dt 与 B_param)
+        B_d = dt.unsqueeze(-1) * B_param.unsqueeze(2)
 
         h = torch.zeros(B, D, d_state, device=x.device, dtype=x.dtype)
         ys = []
         for i in range(L):
-            h = torch.einsum('bnd,dn->bd', h, A_d[:, i]) + torch.einsum('bd,dn->bd', x_conv[:, i], B_d[:, i])
-            y = torch.einsum('bd,dn->bn', h, C) + self.D.float() * x_conv[:, i]
+            # h' = A * h + B * x (按 d_state 逐元素)
+            h = A_d[:, i] * h + B_d[:, i] * x_conv[:, i].unsqueeze(-1)
+            # y = C · h + D * x (在 d_state 维做内积)
+            y = torch.einsum('bnd,bd->bn', h, C[:, i]) + self.D.float() * x_conv[:, i]
             ys.append(y)
 
         y = torch.stack(ys, dim=1)
@@ -370,7 +378,8 @@ class DualBranchEncoder(nn.Module):
             all_trajs = torch.cat(ssm_trajectories, dim=1)  # [B, n_ctm_layers, H*W, C]
             all_trajs = all_trajs.transpose(2, 1)  # [B, H*W, n_ctm_layers, C]
             flat_trajs = all_trajs.reshape(B, -1, self.d_model)  # [B, n_patches*n_ctm, C]
-            ctm_metrics = self.ctm_analyzers[0].hallucination_score(flat_trajs.unsqueeze(1))
+            # CTMTrajectoryAnalyzer expects [B, T, D] - we treat each patch as a timestep
+            ctm_metrics = self.ctm_analyzers[0].hallucination_score(flat_trajs)
         
         return x, ctm_metrics
 
@@ -696,7 +705,8 @@ class MedMambaV3(nn.Module):
         # CTM分析
         ctm_score = None
         if self.ctm is not None and return_ctm:
-            x_flat = moe_feat.flatten(2).transpose(1, 2).unsqueeze(1)
+            # CTMTrajectoryAnalyzer expects [B, T, D] - flatten HW into T
+            x_flat = moe_feat.flatten(2).transpose(1, 2)  # [B, H*W, C]
             ctm_score = self.ctm.hallucination_score(x_flat)
         
         # 任务头

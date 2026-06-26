@@ -525,14 +525,15 @@ class CTMTrajectoryAnalyzer(nn.Module):
         trajectory: [B, T, D] - MoE状态的序列 (T=层序号)
         """
         T = trajectory.shape[1]
-        k = min(self.num_ticks, T)
+        # Need at least 2 ticks to compute diff-based oscillation.
+        k = max(2, min(self.num_ticks, T))
         last_k = trajectory[:, -k:, :]  # [B, k, D]
-        
+
         # 稳定性: 最后k步范数均值的倒数
         last_norms = torch.norm(last_k, dim=-1)
         stability = 1.0 / (1.0 + last_norms.mean(dim=-1))
-        
-        # 振荡: 相邻时间步差的方差
+
+        # 振荡: 相邻时间步差的方差 (k >= 2 guaranteed above)
         deltas = torch.norm(torch.diff(last_k, dim=1), dim=-1)
         oscillation = deltas.std(dim=-1)
         

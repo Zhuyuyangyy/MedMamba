@@ -426,6 +426,12 @@ class MedMambaGuard(nn.Module):
         use_cross_scan: bool = True,
         use_task_validator: bool = True,
         model_version: str = "MedMamba-Guard-v1.0",
+        # API-compat kwargs (MedMamba V2/V3-style signatures).
+        # MedMambaGuard operates on raw spatial features, so img_size/patch_size
+        # are accepted but unused.
+        img_size: int = None,
+        patch_size: int = None,
+        **kwargs,
     ):
         from .ssm_config import MedMambaGuardConfig
         if isinstance(d_model, MedMambaGuardConfig):

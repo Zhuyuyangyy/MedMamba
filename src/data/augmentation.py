@@ -704,3 +704,18 @@ def get_augmentation_pipeline(
         transforms = [t for _, t in MedicalAugmentation.VAL]
     
     return Compose(transforms)
+
+
+# Public API alias.
+# get_train_transforms is the conventional name expected by tests / external
+# scripts; it maps to the train-mode pipeline of get_augmentation_pipeline.
+def get_train_transforms(
+    use_ct: bool = False,
+    custom_transforms: Optional[List[Callable]] = None,
+) -> Callable:
+    """Get the training augmentation pipeline."""
+    return get_augmentation_pipeline(
+        mode="train",
+        use_ct=use_ct,
+        custom_transforms=custom_transforms,
+    )
